@@ -1,75 +1,80 @@
-# LegacyCode — RetroAgent for Windows 3.2
+# RetroAgent for Windows 3.2
 
-在 Windows 3.2 桌面里获得近似原生的 Claude Code 体验：本机用 QEMU 跑 Win3.2，
-通过串口接到 Python Bridge，Bridge 再调用本地 `claude` CLI。
+> 在 1994 年的中文 Windows 3.2 桌面上,和 Claude 对话。
 
-## 第一版目标
-在 Win3.2 桌面打开一个串口客户端，逐行向 Claude 提问，实时收到回复，全程中文（GB2312）。
+📖 **[项目全文](articles/win3.2-claude.md)** · 📦 **[GitHub](https://github.com/ameriadam12/retroagent-win3.2)**
 
-## 架构链路
+Windows 3.2 跑不了 Claude Code(没 Node、没网栈),但能让 Claude **住在隔壁**——用一根虚拟串口线把 Win3.2 接到本机的 `claude` CLI:
+
 ```
-Win3.2 桌面客户端 ──COM1──> QEMU 虚拟串口 ──unix socket──> Python Bridge ──subprocess──> 本机 claude CLI
-                                                                                (CLAUDE_CONFIG_DIR → ./claude-home)
+Win3.2 桌面(Terminal.exe) ──COM1──> QEMU 虚拟串口 ──unix socket──> Python Bridge ──subprocess──> claude CLI
 ```
 
-## 硬约束
-- **所有内容局限在本文件夹内**：介质、磁盘镜像、Bridge 代码、claude 配置与会话都在此目录下。
-- 不向系统目录写入、不建系统网桥、不改系统配置。
-- claude 默认把配置/会话写到 `~/.claude`；用 `CLAUDE_CONFIG_DIR` 重定向到 `./claude-home`。
+Win3.2 里敲 `ASK <问题>`,Bridge 调 claude,回复(中文,自动换行)显示在 Terminal。思考时显示 `*Thinking`。
 
-## 目录（规划）
-| 目录 | 用途 |
+## 快速开始
+
+### 1. clone + 补介质(大文件在 .gitignore 之外,需单独下)
+```bash
+git clone https://github.com/ameriadam12/retroagent-win3.2.git
+cd retroagent-win3.2
+mkdir -p media tools vm/sockets vm/run
+
+# DOS 安装光盘(MS-DOS 7.1) + Win3.2 中文版文件树(经 HTTP 代理,如需)
+curl -L -o media/dos71cd.iso "https://archive.org/download/dos71cd/dos71cd.iso"
+curl -L -o media/win32c.zip "https://archive.org/download/win32c/win32c.zip"
+
+# 可选:Open Watcom(只在你打算重新编译 Win16 客户端时需要)
+gh release download Current-build -R open-watcom/open-watcom-v2 -p ow-snapshot.tar.xz
+mkdir tools && tar xJf ow-snapshot.tar.xz -C tools
+```
+
+仓库里已含一个装好的 `vm/disks/win32.qcow2`(MS-DOS 7.1 + Windows 3.2 + 接好的 COM1),clone 即用,不必自己重装。
+
+### 2. 一键启动
+```bash
+./start.sh
+```
+启动 Bridge + QEMU(Win3.2 + VNC `127.0.0.1:5900`)。
+
+### 3. VNC 连上,在 Win3.2 里开 Terminal
+```bash
+vncviewer 127.0.0.1:5900
+```
+- `win` 启动 Win3.2(若在 DOS 提示符)
+- **File → Run** → `C:\WINDOWS\TERMINAL.EXE`
+- **Settings → Communications** → COM1 / 9600 / 8-N-1
+- **Settings → Terminal Preferences** → 勾 **Local Echo** + **Line Wrap**
+- 敲 `ASK 你好` 回车 → 看到 `*Thinking` + Claude 回复
+
+## 架构
+
+| 组件 | 文件 | 作用 |
+|------|------|------|
+| Bridge | `bridge/retrobridge.py` | 监听 unix socket,`ASK` 协议,调 `claude -p --output-format stream-json --include-partial-messages`,`*Thinking` 指示 + 完整回复(GBK 编码,自动换行) |
+| 回环测试 | `bridge/loopback_client.py` | 本机模拟串口客户端,验证 Bridge↔claude(不依赖 VM) |
+| Win3.2 镜像 | `vm/disks/win32.qcow2` | MS-DOS 7.1 + Windows 3.2 中文版,FAT16,COM1 已接 |
+| QEMU 读屏 | `vm/qmscreen.py` | QMP send-key + VGA `0xB8000` 文本 dump(GBK 解码),盲操作 DOS 用 |
+| CDU 快进 | `vm/ffwd.py` | CDU 安装向导自动过过渡屏 |
+| Win16 客户端 | `client-win16/` | Open Watcom 源码(详见下方坑) |
+| 启动脚本 | `start.sh` | 一键起 Bridge + QEMU |
+
+## 已知的坑(踩坑实录)
+
+- **QEMU 8.2 send-key 格式变了**:要 `{"keys":[{"type":"qcode","data":"ret"}]}`,旧文档的 `["ret"]` 裸字符串会被静默拒。
+- **VGA 文本读屏**:`0xB8000` dump 4000 字节 + GBK 解码,盲操作 DOS/CDU 中文菜单。
+- **libguestfs 没root 用不了**(supermin 读 `/boot/vmlinuz` 权限拒绝)→ 改用 mtools `mcopy -i image@@32256` 直接操作 raw 镜像里的 FAT16 分区。
+- **Open Watcom Win16 加载崩**:`client-win16/client.exe` 编译成功,但在 Win3.2 中文版 + QEMU 加载即崩(官方 winhello 示例也崩)。工具链兼容性硬伤,改用 Win3.2 自带 Terminal.exe。
+- **claude headless**:`CLAUDE_CONFIG_DIR` 重定向会话到项目内;`--include-partial-messages` 才有 `stream_event`(否则只有 system/assistant/result);`stdin=/dev/null` 避免等 stdin 告警。
+
+## 介质来源
+
+| 文件 | 来源 |
 |------|------|
-| `media/` | 下载的 DOS / Win3.2 安装介质 |
-| `vm/disks/` | qcow2 磁盘镜像（含 savevm 快照） |
-| `vm/sockets/` | unix socket：`com1.sock`（串口）、`qmp.sock`（QMP 控制） |
-| `vm/run/` | QEMU 运行时：pid、monitor、日志 |
-| `bridge/` | Python Bridge 后端 |
-| `claude-home/` | claude 配置/会话重定向目标（`CLAUDE_CONFIG_DIR`） |
+| `dos71cd.iso` | [archive.org/dos71cd](https://archive.org/details/dos71cd) — MS-DOS 7.1 CDU 安装光盘 |
+| `win32c.zip` | [archive.org/win32c](https://archive.org/details/win32c) — Windows 3.2 中文版已安装文件树 |
+| Open Watcom | [github.com/open-watcom/open-watcom-v2](https://github.com/open-watcom/open-watcom-v2) `Current-build` release |
 
-## 本机环境（已探查）
-- KVM / QEMU 8.2.2（**非 PVE**），无 `vmbr-retro` 网段——Win3.2 走串口，不需要以太网。
-- Python 3.12.3 + pip3。
-- `/mnt/shared` 为 ext4（`rw,noatime`），478G 可用，支持稀疏文件（qcow2 与快照可用）。
-- `claude` CLI 2.1.208（`/home/adam/.nvm/.../bin/claude`）。
-- 本机 HTTP 代理 `127.0.0.1:20171`（v2rayA）。
+## 文章
 
-## 调研结论（三块全部完成）
-
-### 1. claude headless 调用
-- 命令模板：
-  ```
-  CLAUDE_CONFIG_DIR=./claude-home claude -p "..." \
-      --output-format stream-json \
-      --resume <session_id> \
-      --add-dir <worktree>
-  ```
-- 输出为 NDJSON，关键行：`system/init`（含 `session_id`）、`assistant`、`stream_event`、`result`。
-- session 恢复：`--resume <session_id>`，跨进程可恢复同一段对话。
-- **注意**：具体字段路径据 SDK 推断，实施时需实测，不照抄。
-
-### 2. QEMU + 串口配置（已定型）
-- 基础：`-M pc -cpu 486 -m 32 -vga std`，无网无声 `-nic none -audiodev none,id=none`。
-- 中文显示：Win3.2 自带 GB2312 字库，标准 VGA 驱动即可——无硬障碍。避免 `bochs-display` / `virtio-vga` / `-cpu max`。
-- COM1 → unix socket：`-chardev socket,id=com1,path=<项目内>,server=on,wait=off -serial chardev:com1`。
-- QMP 控制：另开 `-chardev socket,id=qmp,... -qmp chardev:qmp`；Python 用 `subprocess.Popen`（不用 `-daemonize`），经 QMP 发 `savevm`/`quit`。
-- 磁盘：qcow2 512MB；软盘 `-fda`，换盘用 monitor `change fda`；快照 `savevm/loadvm` 存在 qcow2 内部。
-
-### 3. 介质来源
-- **Win3.2 简体中文**：WinWorldPC（12.15MB 软盘，**需注册账号**）或 Archive.org。
-- **DOS 底座**：MS-DOS 7.1 CDU ISO（Archive.org，免注册）或 MS-DOS 6.22 软盘（WinWorldPC）。
-- 暂无现成「预装 DOS + Win3.2」的硬盘镜像。
-- **实际可下性以实测为准**（见下）。
-
-## 推荐执行顺序（自底向上，每层可独立验证）
-1. **阶段 1 · Bridge 核心**（纯本机 Linux，最快出成果）：写 Python Bridge——监听 unix socket、解析逐行协议、调 claude CLI（stream-json）、返回文本、session 恢复、UTF-8↔GB2312 编码。用一个本地回环客户端模拟 Win3.2 端，验证 Bridge↔claude 全链路。
-2. **阶段 2 · Win3.2 VM**：下载介质 → 建 qcow2 → 装 DOS → 装 Win3.2 → 配 COM1→socket → 存基线快照。
-3. **阶段 3 · 端到端**：Win3.2 内用客户端连 COM1，验证「Win3.2 输入 → Bridge → claude → 回复 → Win3.2 显示」与中文 GB2312。
-
-## 待决事项
-1. **执行起点**：先做阶段 1（Bridge，快速验证核心）还是先做阶段 2（下介质装 VM）。
-2. **Win3.2 客户端**：自写 Win16 串口小程序（Open Watcom，可控但要编译调试）vs 现成终端程序（Terminal.exe 仅 57600；QModem Pro 等难获取）。
-3. **介质获取**：以 Archive.org 为主（免注册），若不可直下再请你提供 WinWorldPC 账号或介质。
-
-## 状态
-调研全部完成（3/3）。待确认执行起点与客户端选型后正式动手。
+完整项目记录(人化版,适合公众号/知乎):**[articles/win3.2-claude.md](articles/win3.2-claude.md)**
