@@ -1,0 +1,20 @@
+# 大文件 / 可重新下载的(README 说明来源)
+tools/
+media/dos71cd/
+media/win32c/
+media/win32full/
+media/*.iso
+media/*.zip
+media/*.rar
+
+# 运行时 / 临时
+vm/disks/win32.raw
+vm/run/
+vm/sockets/
+__pycache__/
+*.pyc
+
+# claude 会话历史(个人数据)
+claude-home/projects/
+claude-home/sessions/
+claude-home/backups/
