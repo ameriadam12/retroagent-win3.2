@@ -1,80 +1,88 @@
 # RetroAgent for Windows 3.2
 
-> 在 1994 年的中文 Windows 3.2 桌面上,和 Claude 对话。
+在中文 Windows 3.2 的终端里输入问题，由宿主机上的 Claude CLI 生成回复，再通过虚拟串口显示回来。
 
 📖 **[项目全文](articles/win3.2-claude.md)** · 📦 **[GitHub](https://github.com/ameriadam12/retroagent-win3.2)**
 
-Windows 3.2 跑不了 Claude Code(没 Node、没网栈),但能让 Claude **住在隔壁**——用一根虚拟串口线把 Win3.2 接到本机的 `claude` CLI:
+适合复古计算与串口桥接实验。Windows 3.2 端使用系统自带 `Terminal.exe`；模型调用发生在宿主机，需要可用的 `claude` 命令及对应账户配置。
 
+![Windows 3.2 终端显示 Claude 回复](articles/terminal-win3.2.jpg)
+
+## 使用示例
+
+启动后，在 Windows 3.2 的 Terminal 中输入：
+
+```text
+ASK 用一句中文介绍你自己。
 ```
-Win3.2 桌面(Terminal.exe) ──COM1──> QEMU 虚拟串口 ──unix socket──> Python Bridge ──subprocess──> claude CLI
+
+Bridge 先回显问题，再输出完整回复；收到模型的思考事件时显示 `*Thinking`。回复采用 GBK 编码和换行处理，**不会逐 token 流式显示**。同一串口连接内的后续问题会续接 Claude session。
+
+先检查串口是否连通，也可以输入：
+
+```text
+PING
 ```
 
-Win3.2 里敲 `ASK <问题>`,Bridge 调 claude,回复(中文,自动换行)显示在 Terminal。思考时显示 `*Thinking`。
+Bridge 的固定回复为 `PONG RetroAgent/1`。
 
-## 快速开始
+## 安装与启动
 
-### 1. clone + 补介质(大文件在 .gitignore 之外,需单独下)
-```bash
+需要支持 Unix socket 的宿主环境，以及 Python 3、`qemu-system-x86_64`、VNC 客户端和可运行的 Claude CLI。启动脚本使用 Bash。
+
+```sh
 git clone https://github.com/ameriadam12/retroagent-win3.2.git
 cd retroagent-win3.2
-mkdir -p media tools vm/sockets vm/run
-
-# DOS 安装光盘(MS-DOS 7.1) + Win3.2 中文版文件树(经 HTTP 代理,如需)
-curl -L -o media/dos71cd.iso "https://archive.org/download/dos71cd/dos71cd.iso"
-curl -L -o media/win32c.zip "https://archive.org/download/win32c/win32c.zip"
-
-# 可选:Open Watcom(只在你打算重新编译 Win16 客户端时需要)
-gh release download Current-build -R open-watcom/open-watcom-v2 -p ow-snapshot.tar.xz
-mkdir tools && tar xJf ow-snapshot.tar.xz -C tools
 ```
 
-仓库里已含一个装好的 `vm/disks/win32.qcow2`(MS-DOS 7.1 + Windows 3.2 + 接好的 COM1),clone 即用,不必自己重装。
+仓库已包含 `vm/disks/win32.qcow2`。默认启动使用这份镜像，**无需先下载 DOS 或 Windows 安装介质**。
 
-### 2. 一键启动
-```bash
+Bridge 固定使用项目内的 `claude-home/` 作为 Claude 配置目录。先在同一目录下确认 CLI 可用：
+
+```sh
+CLAUDE_CONFIG_DIR="$PWD/claude-home" claude
+```
+
+完成账户配置并退出 CLI 后，启动 Bridge 与 QEMU：
+
+```sh
 ./start.sh
 ```
-启动 Bridge + QEMU(Win3.2 + VNC `127.0.0.1:5900`)。
 
-### 3. VNC 连上,在 Win3.2 里开 Terminal
-```bash
+在另一个终端连接 VNC：
+
+```sh
 vncviewer 127.0.0.1:5900
 ```
-- `win` 启动 Win3.2(若在 DOS 提示符)
-- **File → Run** → `C:\WINDOWS\TERMINAL.EXE`
-- **Settings → Communications** → COM1 / 9600 / 8-N-1
-- **Settings → Terminal Preferences** → 勾 **Local Echo** + **Line Wrap**
-- 敲 `ASK 你好` 回车 → 看到 `*Thinking` + Claude 回复
 
-## 架构
+进入 Windows 3.2 后：
 
-| 组件 | 文件 | 作用 |
-|------|------|------|
-| Bridge | `bridge/retrobridge.py` | 监听 unix socket,`ASK` 协议,调 `claude -p --output-format stream-json --include-partial-messages`,`*Thinking` 指示 + 完整回复(GBK 编码,自动换行) |
-| 回环测试 | `bridge/loopback_client.py` | 本机模拟串口客户端,验证 Bridge↔claude(不依赖 VM) |
-| Win3.2 镜像 | `vm/disks/win32.qcow2` | MS-DOS 7.1 + Windows 3.2 中文版,FAT16,COM1 已接 |
-| QEMU 读屏 | `vm/qmscreen.py` | QMP send-key + VGA `0xB8000` 文本 dump(GBK 解码),盲操作 DOS 用 |
-| CDU 快进 | `vm/ffwd.py` | CDU 安装向导自动过过渡屏 |
-| Win16 客户端 | `client-win16/` | Open Watcom 源码(详见下方坑) |
-| 启动脚本 | `start.sh` | 一键起 Bridge + QEMU |
+1. 若停在 DOS 提示符，输入 `win`。
+2. 通过 **File → Run** 打开 `C:\WINDOWS\TERMINAL.EXE`。
+3. **Settings → Communications**：COM1、9600、8-N-1。
+4. **Settings → Terminal Preferences**：勾选 **Local Echo** 和 **Line Wrap**。
+5. 输入 `PING` 或 `ASK <问题>`，按回车。
 
-## 已知的坑(踩坑实录)
+在运行 `start.sh` 的终端按 Ctrl+C 停止。VNC 绑定 `127.0.0.1:5900`；Bridge 与 QEMU 的日志分别位于 `vm/run/bridge.log` 和 `vm/run/qemu.log`。
 
-- **QEMU 8.2 send-key 格式变了**:要 `{"keys":[{"type":"qcode","data":"ret"}]}`,旧文档的 `["ret"]` 裸字符串会被静默拒。
-- **VGA 文本读屏**:`0xB8000` dump 4000 字节 + GBK 解码,盲操作 DOS/CDU 中文菜单。
-- **libguestfs 没root 用不了**(supermin 读 `/boot/vmlinuz` 权限拒绝)→ 改用 mtools `mcopy -i image@@32256` 直接操作 raw 镜像里的 FAT16 分区。
-- **Open Watcom Win16 加载崩**:`client-win16/client.exe` 编译成功,但在 Win3.2 中文版 + QEMU 加载即崩(官方 winhello 示例也崩)。工具链兼容性硬伤,改用 Win3.2 自带 Terminal.exe。
-- **claude headless**:`CLAUDE_CONFIG_DIR` 重定向会话到项目内;`--include-partial-messages` 才有 `stream_event`(否则只有 system/assistant/result);`stdin=/dev/null` 避免等 stdin 告警。
+## 连接方式
 
-## 介质来源
+Windows Terminal 将一行命令写入 COM1；QEMU 把串口连接到 Unix socket，Python Bridge 调用宿主机的 Claude CLI，再把回复写回串口。Windows 3.2 本身不运行 Claude Code，也不需要自行访问模型服务。
 
-| 文件 | 来源 |
-|------|------|
-| `dos71cd.iso` | [archive.org/dos71cd](https://archive.org/details/dos71cd) — MS-DOS 7.1 CDU 安装光盘 |
-| `win32c.zip` | [archive.org/win32c](https://archive.org/details/win32c) — Windows 3.2 中文版已安装文件树 |
-| Open Watcom | [github.com/open-watcom/open-watcom-v2](https://github.com/open-watcom/open-watcom-v2) `Current-build` release |
+| 组件 | 实现 |
+| --- | --- |
+| 串口协议、GBK 编解码、Claude session | [bridge/retrobridge.py](bridge/retrobridge.py) |
+| Bridge、QEMU 与 VNC 启动 | [start.sh](start.sh) |
+| 项目记录与演示背景 | [articles/win3.2-claude.md](articles/win3.2-claude.md) |
 
-## 文章
+## 已知限制
 
-完整项目记录(人化版,适合公众号/知乎):**[articles/win3.2-claude.md](articles/win3.2-claude.md)**
+- 当前推荐客户端是系统自带 Terminal。项目记录中，`client-win16/client.exe` 在 Windows 3.2 加载崩溃，保留源码供排查。
+- GBK 无法表示的字符会被替换；回复中的 Markdown 会作为纯文本显示。
+- `*Thinking` 取决于 CLI 是否发出相应事件，不能保证每轮出现。
+- 现有 `bridge/loopback_client.py` 等待 `__END__` 结束标记，但 Bridge 当前没有发送该标记；它不能作为默认可完成的回环验证。
+- 本仓库没有根 LICENSE 文件；Windows／DOS 镜像、安装介质和其他第三方工具的许可需要分别确认。
+
+## 开发与排查
+
+重新编译 Win16 客户端、安装介质来源、QMP 读屏与工具链问题，见 [CONTRIBUTING.md](CONTRIBUTING.md)。完整项目记录保留在 [文章](articles/win3.2-claude.md) 中。
